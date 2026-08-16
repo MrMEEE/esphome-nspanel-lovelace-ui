@@ -374,7 +374,7 @@ void NSPanelLovelace::upload_tft(const std::string &url) {
   }
 
   std::string response;
-  ESP_LOGD(TAG, "Waiting for upgrade response");
+  ESP_LOGD(TAG, "Waiting for upgrade response for 10 seconds");
   this->recv_ret_string_(response, 10000, true);  // This can take some time to return
 
   // The Nextion display will, if it's ready to accept data, send a 0x05 byte.
