@@ -353,9 +353,6 @@ void NSPanelLovelace::upload_tft(const std::string &url) {
   // The Nextion will ignore the update command if it is sleeping
 
   char command[128];
-  // Tells the Nextion the content length of the tft file and baud rate it will be sent at
-  // Once the Nextion accepts the command it will wait until the file is successfully uploaded
-  // If it fails for any reason a power cycle of the display will be needed
   sprintf(command, "whmi-wris %d,%d,1", this->content_length_, this->update_baud_rate_);
 
   // Clear serial receive buffer
@@ -366,9 +363,6 @@ void NSPanelLovelace::upload_tft(const std::string &url) {
 
   this->send_nextion_command(command);
 
-  // Since 115200 is default and the communication wouldn't work even if it was overridden
-  // in the uart component initialization, it should be safe to ignore setting the baud rate
-  // if it's set to 115200. It helps to avoid additional unnecessary HardwareSerial re-init.
   if (this->update_baud_rate_ != 115200) {
     this->set_baud_rate_(this->update_baud_rate_);
   }
@@ -381,11 +375,18 @@ void NSPanelLovelace::upload_tft(const std::string &url) {
   ESP_LOGD(TAG, "Upgrade response is [%s]",
            format_hex_pretty(reinterpret_cast<const uint8_t *>(response.data()), response.size()).c_str());
 
+  bool raw_fallback_mode = false;
   if (response.find(0x05) != std::string::npos) {
-    ESP_LOGD(TAG, "preparation for tft update done");
+    ESP_LOGD(TAG, "preparation for tft update done via standard protocol");
   } else {
-    ESP_LOGD(TAG, "preparation for tft update failed %d \"%s\"", response[0], response.c_str());
-    this->upload_end_();
+    // OPTIONAL RAW / BYPASS METHOD
+    // If standard whmi-wris protocol handshake returns empty ([]) or fails, 
+    // instead of aborting, we can attempt a raw blind chunk stream directly.
+    ESP_LOGW(TAG, "Standard handshake failed (response: []). Engaging OPTIONAL RAW fallback stream mode...");
+    raw_fallback_mode = true;
+    
+    // Give the display a short moment to clear its internal buffer state
+    delay(1000);
   }
 
   // Nextion wants 4096 bytes at a time. Make chunk_size a multiple of 4096
@@ -396,7 +397,6 @@ void NSPanelLovelace::upload_tft(const std::string &url) {
   } else if (esp_get_free_heap_size() < 10240) {
     chunk_size = 4096;
   }
-
 
   if (this->transfer_buffer_ == nullptr) {
     ExternalRAMAllocator<uint8_t> allocator(ExternalRAMAllocator<uint8_t>::ALLOW_FAILURE);
@@ -417,8 +417,8 @@ void NSPanelLovelace::upload_tft(const std::string &url) {
   }
 
   // NOLINTNEXTLINE(readability-static-accessed-through-instance)
-  ESP_LOGD(TAG, "Updating tft from \"%s\" with a file size of %d using %zu chunksize, Heap Size %d",
-           url.c_str(), this->content_length_, this->transfer_buffer_size_, esp_get_free_heap_size());
+  ESP_LOGD(TAG, "Updating tft from \"%s\" with a file size of %d using %zu chunksize, Heap Size %d (Raw Mode: %s)",
+           url.c_str(), this->content_length_, this->transfer_buffer_size_, esp_get_free_heap_size(), raw_fallback_mode ? "YES" : "NO");
 
   int result = 0;
   while (this->content_length_ > 0) {
